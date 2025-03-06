@@ -1,8 +1,9 @@
 from googleapiclient.discovery import build
 import base64
-import re
+import sqlite3
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from newspaper import Article
 
 
 def get_gmail_service():
@@ -10,32 +11,67 @@ def get_gmail_service():
     return get_gmail_service()
 
 
-def extract_text_from_html(html_content, sender):
-    """Extracts relevant information from HTML emails based on the sender."""
+def extract_titles_and_links(html_content, sender):
+    """Extracts article titles and links from HTML emails."""
     soup = BeautifulSoup(html_content, "html.parser")
-    articles = set()  # Use a set to avoid duplicates
+    articles = []
 
     if "dataelixir" in sender:
-        # Extract ALL <h2> titles and their following <p> summaries
-        h2_tags = soup.find_all("h2")
-        for h2 in h2_tags:
+        for h2 in soup.find_all("h2"):
             title = h2.get_text(strip=True)
-            articles.add(f"• {title}")
+            a_tag = h2.find("a")  # Get the link inside <h2>
+            link = a_tag["href"] if a_tag else None
+            articles.append({"title": title, "link": link})
 
     elif "datascienceweekly" in sender:
-        # Extract ONLY from "Editor's Picks" & "Data Science Articles & Videos"
         sections_of_interest = ["Editor's Picks", "Data Science Articles & Videos"]
-
         for h2 in soup.find_all("h2"):
             if h2.get_text(strip=True) in sections_of_interest:
-                ul = h2.find_next("ul")  # Find the next <ul> under this section
+                ul = h2.find_next("ul")
                 if ul:
                     for li in ul.find_all("li"):
                         strong_tag = li.find("strong")
+                        a_tag = li.find("a")  # Extract URL
                         title = strong_tag.get_text(strip=True) if strong_tag else "Untitled"
-                        articles.add(f"• {title}")
+                        link = a_tag["href"] if a_tag else None
+                        articles.append({"title": title, "link": link})
 
-    return "\n".join(list(articles)[:10]) if articles else "No relevant content found."
+    return articles
+
+
+def fetch_article_text(url):
+    """Fetches the main content from an article URL."""
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        return article.text[:1000]  # Limit to 1000 characters to keep summaries short
+    except Exception as e:
+        print(f"Failed to extract article: {e}")
+        return None
+
+
+def save_article(newsletter_type, title, url, summary):
+    """Stores article data in SQLite to prevent redundant scraping."""
+    conn = sqlite3.connect("newsletters.db")
+    cursor = conn.cursor()
+
+
+    cursor.execute("INSERT OR REPLACE INTO articles (newsletter_type, title, url, summary) VALUES (?, ?, ?)",
+                   (newsletter_type, title, url, summary))
+
+    conn.commit()
+    conn.close()
+
+
+def get_cached_summary(url):
+    """Checks if an article summary is already stored in SQLite."""
+    conn = sqlite3.connect("newsletters.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT summary FROM articles WHERE url = ?", (url,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 
 def search_newsletters(newsletter_type=None):
@@ -45,7 +81,6 @@ def search_newsletters(newsletter_type=None):
     last_week_date = (datetime.now() - timedelta(weeks=1)).strftime('%Y/%m/%d')
 
     query = ''
-
     if newsletter_type == 'datascienceweekly':
         query = f'from:(datascienceweekly@substack.com) after:{last_week_date}'
     elif newsletter_type == 'dataelixir':
@@ -75,11 +110,31 @@ def search_newsletters(newsletter_type=None):
         elif "parts" in payload:
             html_content = next((base64.urlsafe_b64decode(p["body"]["data"]).decode("utf-8")
                                  for p in payload["parts"] if p.get("mimeType") == "text/html"), "")
-            body_text = extract_text_from_html(html_content, sender) if html_content else "No content found."
+            articles = extract_titles_and_links(html_content, sender) if html_content else []
         else:
-            body_text = "No content found."
+            articles = []
 
-        emails.append({"subject": subject, "summary": body_text})
+        # Fetch & Store article summaries
+        for article in articles:
+            title, url = article["title"], article["link"]
+            if url:
+                cached_summary = get_cached_summary(url)
+                if not cached_summary:
+                    summary = fetch_article_text(url)
+                    if summary:
+                        save_article(newsletter_type, title, url, summary)
+                    else:
+                        summary = "Could not fetch summary. Going to work on this right now. Sorry 🥲\n\n ⚠️ Please consider that if the article leads to an online course or a YouTube video, then I can't summarize it. ⚠️"
+                else:
+                    summary = cached_summary
+            else:
+                summary = "No link available."
+
+
+            article["summary"] = summary
+
+        emails.append({"Newsletter": subject,
+                       "Articles": articles})
 
     return emails
 
@@ -87,4 +142,6 @@ def search_newsletters(newsletter_type=None):
 if __name__ == "__main__":
     newsletters = search_newsletters()
     for news in newsletters:
-        print(f"📌 {news['subject']}\n{news['summary']}\n")
+        print(f"📌 {news['Newsletter']}")
+        for article in news["Articles"]:
+            print(f"• {article['title']}\n  🔗 {article['link']}\n  📝 {article['summary']}\n")
