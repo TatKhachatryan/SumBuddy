@@ -4,7 +4,35 @@ import sqlite3
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from newspaper import Article
+from transformers import T5Tokenizer, T5ForConditionalGeneration
 
+# Load the model and tokenizer
+tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-small")
+model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small")
+
+def summarize_text(text, max_length=100):
+    """
+    Summarizes a given text using the FLAN-T5 model.
+
+    Args:
+        text (str): The input text to summarize.
+        max_length (int): The maximum length of the summary.
+
+    Returns:
+        str: The generated summary.
+    """
+    input_text = f"summarize: {text}"
+    inputs = tokenizer(input_text, return_tensors="pt", max_length=512, truncation=True)
+
+    summary_ids = model.generate(
+        inputs.input_ids,
+        max_length=max_length,
+        num_beams=4,
+        length_penalty=2.0,
+        early_stopping=True
+    )
+
+    return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
 def get_gmail_service():
     from gmail_connect import get_gmail_service
@@ -53,20 +81,25 @@ def fetch_article_text(url):
 
 def save_article(newsletter_type, title, url, summary):
     """Stores article data in SQLite to prevent redundant scraping."""
-    conn = sqlite3.connect("newsletters.db")
+    conn = sqlite3.connect("newsletter.db")
     cursor = conn.cursor()
+    print(f"Saving article - Newsletter Type: {newsletter_type}, Title: {title}, URL: {url}")
 
-
-    cursor.execute("INSERT OR REPLACE INTO articles (newsletter_type, title, url, summary) VALUES (?, ?, ?)",
-                   (newsletter_type, title, url, summary))
-
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute(
+            "INSERT OR IGNORE INTO articles (newsletter_type, title, url, summary) VALUES (?, ?, ?, ?)",
+            (newsletter_type, title, url, summary)
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+    finally:
+        conn.close()
 
 
 def get_cached_summary(url):
     """Checks if an article summary is already stored in SQLite."""
-    conn = sqlite3.connect("newsletters.db")
+    conn = sqlite3.connect("newsletter.db")
     cursor = conn.cursor()
     cursor.execute("SELECT summary FROM articles WHERE url = ?", (url,))
     result = cursor.fetchone()
@@ -97,7 +130,7 @@ def search_newsletters(newsletter_type=None):
 
     emails = []
     for msg in messages:
-        msg_data = service.users().messages().get(userId='me', id=msg['id']).execute()
+        msg_data = service.users().messages().get(userId='me', id=messages[0]['id']).execute()
         payload = msg_data['payload']
 
         headers = payload.get('headers', [])
@@ -120,8 +153,9 @@ def search_newsletters(newsletter_type=None):
             if url:
                 cached_summary = get_cached_summary(url)
                 if not cached_summary:
-                    summary = fetch_article_text(url)
-                    if summary:
+                    full_text = fetch_article_text(url)
+                    if full_text:
+                        summary = summarize_text(full_text)  # 🔹 Apply FLAN-T5 summarizer
                         save_article(newsletter_type, title, url, summary)
                     else:
                         summary = "Could not fetch summary. Going to work on this right now. Sorry 🥲\n\n ⚠️ Please consider that if the article leads to an online course or a YouTube video, then I can't summarize it. ⚠️"
@@ -129,7 +163,6 @@ def search_newsletters(newsletter_type=None):
                     summary = cached_summary
             else:
                 summary = "No link available."
-
 
             article["summary"] = summary
 
