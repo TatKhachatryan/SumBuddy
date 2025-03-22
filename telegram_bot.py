@@ -1,10 +1,13 @@
 import asyncio
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from fetch_newsletters import fetch_article_text, summarize_text, detect_language
 
-TELEGRAM_BOT_TOKEN = "7985776943:AAED4vPWy2qd6VJdqjMOfpn6IGiCRHrMpIY"
-
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 async def start(update: Update, context):
     welcome_message = (
