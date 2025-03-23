@@ -35,6 +35,7 @@ def detect_language(text):
 
 
 def summarize_text(text, summary_type="casual"):
+    text = text[:2000]  # Limit input to prevent crashes
     """
     Summarizes text using the FLAN-T5 model with different styles and length constraints.
     """
