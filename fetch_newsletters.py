@@ -7,9 +7,10 @@ from langdetect import detect
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 # Load the summarization model and tokenizer once
-tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-small", legacy=False)
-model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-small")
-
+tokenizer = T5Tokenizer.from_pretrained("google/flan-t5-base", legacy=False)
+model = T5ForConditionalGeneration.from_pretrained("google/flan-t5-base")
+device = "cpu"  # Or "cuda" if you later upgrade to a GPU instance
+model.to(device)
 
 async def fetch_article_text(url, semaphore=None):
     """
@@ -81,7 +82,7 @@ def summarize_text(text, summary_type="casual"):
         input_text = f"Summarize: {text}"
         max_length = 200
 
-    inputs = tokenizer(input_text, return_tensors="pt", max_length=512, truncation=True)
+    inputs = tokenizer(input_text, return_tensors="pt", max_length=256, truncation=True)
     summary_ids = model.generate(
         inputs.input_ids,
         max_length=max_length,
