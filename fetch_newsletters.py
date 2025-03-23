@@ -2,7 +2,6 @@ import asyncio
 import re
 from bs4 import BeautifulSoup
 from newspaper import Article
-from requests_html import AsyncHTMLSession
 from langdetect import detect
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
@@ -13,47 +12,17 @@ device = "cpu"  # Or "cuda" if you later upgrade to a GPU instance
 model.to(device)
 
 async def fetch_article_text(url, semaphore=None):
-    """
-    Asynchronously fetches article text. Uses AsyncHTMLSession to render JavaScript,
-    handles Substack redirect links, and processes Medium articles properly.
-    """
     if semaphore is None:
-        semaphore = asyncio.Semaphore(5)  # limit concurrency
-
+        semaphore = asyncio.Semaphore(5)  # Limit concurrency
     async with semaphore:
         try:
-            session = AsyncHTMLSession()
-            response = await session.get(url)
-            await response.html.arender(timeout=20, sleep=2)
-
-            # Handle Substack redirects by following the first absolute link
-            if "substack.com/redirect" in response.url:
-                links = list(response.html.absolute_links)
-                if links:
-                    real_url = links[0]
-                    return await fetch_article_text(real_url, semaphore)
-
-            # Use newspaper3k in a thread for general article extraction
-            def parse_article(url):
-                art = Article(url)
-                art.download()
-                art.parse()
-                return art.text.strip()
-
-            article_text = await asyncio.to_thread(parse_article, response.url)
-
-            # Return valid extracted content
-            if article_text and len(article_text) > 200:
-                return article_text
-
-            # Fallback: Use rendered page text if other methods fail
-            fallback_text = response.html.text.strip()
-            return fallback_text if fallback_text and len(fallback_text) > 200 else None
-
+            art = Article(url)
+            art.download()
+            art.parse()
+            return art.text.strip() if len(art.text) > 200 else None
         except Exception as e:
-            print(f"⚠️ Failed to fetch article ({url}): {e}. Are you sure it's a valid article link? 👀")
+            print(f"⚠️ Failed to fetch article ({url}): {e}")
             return None
-
 
 def detect_language(text):
     """
